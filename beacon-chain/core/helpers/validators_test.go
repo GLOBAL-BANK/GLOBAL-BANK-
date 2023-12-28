@@ -16,6 +16,7 @@ import (
 	ethpb "github.com/prysmaticlabs/prysm/v4/proto/prysm/v1alpha1"
 	"github.com/prysmaticlabs/prysm/v4/testing/assert"
 	"github.com/prysmaticlabs/prysm/v4/testing/require"
+	"github.com/prysmaticlabs/prysm/v4/time/slots"
 )
 
 func TestIsActiveValidator_OK(t *testing.T) {
@@ -264,7 +265,6 @@ func TestBeaconProposerIndex_BadState(t *testing.T) {
 	require.NoError(t, state.SetSlot(100))
 	_, err = BeaconProposerIndex(context.Background(), state)
 	require.NoError(t, err)
-	assert.Equal(t, 0, proposerIndicesCache.Len())
 }
 
 func TestComputeProposerIndex_Compatibility(t *testing.T) {
@@ -560,12 +560,24 @@ func TestActiveValidatorIndices(t *testing.T) {
 			},
 			want: []primitives.ValidatorIndex{0, 2, 3},
 		},
+		{
+			name: "impossible_zero_validators", // Regression test for issue #13051
+			args: args{
+				state: &ethpb.BeaconState{
+					RandaoMixes: make([][]byte, params.BeaconConfig().EpochsPerHistoricalVector),
+					Validators:  make([]*ethpb.Validator, 0),
+				},
+				epoch: 10,
+			},
+			wantedErr: "no active validator indices",
+		},
 	}
 	defer ClearCache()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s, err := state_native.InitializeFromProtoPhase0(tt.args.state)
 			require.NoError(t, err)
+			require.NoError(t, s.SetValidators(tt.args.state.Validators))
 			got, err := ActiveValidatorIndices(context.Background(), s, tt.args.epoch)
 			if tt.wantedErr != "" {
 				assert.ErrorContains(t, tt.wantedErr, err)
@@ -790,4 +802,27 @@ func TestLastActivatedValidatorIndex_OK(t *testing.T) {
 	index, err := LastActivatedValidatorIndex(context.Background(), beaconState)
 	require.NoError(t, err)
 	require.Equal(t, index, primitives.ValidatorIndex(3))
+}
+
+func TestUnsafeProposerIndexAtSlot(t *testing.T) {
+	bRoot := [32]byte{'A'}
+	e := 4
+	slot := primitives.Slot(e) * params.BeaconConfig().SlotsPerEpoch
+	indices, ok := proposerIndicesCache.UnsafeProposerIndices(primitives.Epoch(e), bRoot)
+	require.Equal(t, false, ok)
+
+	beaconState, err := state_native.InitializeFromProtoPhase0(&ethpb.BeaconState{})
+	require.NoError(t, err)
+	roots := make([][]byte, fieldparams.StateRootsLength)
+	roots[(e-1)*int(params.BeaconConfig().SlotsPerEpoch)-1] = bRoot[:]
+	id := primitives.ValidatorIndex(17)
+	indices[0] = id
+	require.NoError(t, beaconState.SetStateRoots(roots))
+	require.NoError(t, beaconState.SetSlot(slot))
+	epoch := slots.ToEpoch(slot)
+	require.Equal(t, primitives.Epoch(e), epoch)
+	proposerIndicesCache.SetUnsafe(epoch, bRoot, indices)
+	pid, err := UnsafeBeaconProposerIndexAtSlot(beaconState, slot)
+	require.NoError(t, err)
+	require.Equal(t, id, pid)
 }

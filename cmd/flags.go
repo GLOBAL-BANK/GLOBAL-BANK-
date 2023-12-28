@@ -159,7 +159,7 @@ var (
 	P2PMaxPeers = &cli.IntFlag{
 		Name:  "p2p-max-peers",
 		Usage: "The max number of p2p peers to maintain.",
-		Value: 45,
+		Value: 70,
 	}
 	// P2PAllowList defines a CIDR subnet to exclusively allow connections.
 	P2PAllowList = &cli.StringFlag{
@@ -176,6 +176,11 @@ var (
 			"Using \"private\" would deny all private subnets. Example: " +
 			"192.168.0.0/16 would deny connections from peers on your local network only. The " +
 			"default is to accept all connections.",
+	}
+	PubsubQueueSize = &cli.IntFlag{
+		Name:  "pubsub-queue-size",
+		Usage: "The size of the pubsub validation and outbound queue for the node.",
+		Value: 1000,
 	}
 	// ForceClearDB removes any previously stored data at the data directory.
 	ForceClearDB = &cli.BoolFlag{

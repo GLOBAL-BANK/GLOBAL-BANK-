@@ -3,6 +3,7 @@ package blockchain
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/pkg/errors"
@@ -42,7 +43,7 @@ type BlockReceiver interface {
 // BlobReceiver interface defines the methods of chain service for receiving new
 // blobs
 type BlobReceiver interface {
-	ReceiveBlob(context.Context, *ethpb.BlobSidecar) error
+	ReceiveBlob(context.Context, blocks.VerifiedROBlob) error
 }
 
 // SlashingReceiver interface defines the methods of chain service for receiving validated slashing over the wire.
@@ -58,6 +59,11 @@ type SlashingReceiver interface {
 func (s *Service) ReceiveBlock(ctx context.Context, block interfaces.ReadOnlySignedBeaconBlock, blockRoot [32]byte) error {
 	ctx, span := trace.StartSpan(ctx, "blockChain.ReceiveBlock")
 	defer span.End()
+	// Return early if the block has been synced
+	if s.InForkchoice(blockRoot) {
+		log.WithField("blockRoot", fmt.Sprintf("%#x", blockRoot)).Debug("Ignoring already synced block")
+		return nil
+	}
 	receivedTime := time.Now()
 	s.blockBeingSynced.set(blockRoot)
 	defer s.blockBeingSynced.unset(blockRoot)
@@ -100,9 +106,13 @@ func (s *Service) ReceiveBlock(ctx context.Context, block interfaces.ReadOnlySig
 	if err := eg.Wait(); err != nil {
 		return err
 	}
+
+	daStartTime := time.Now()
 	if err := s.isDataAvailable(ctx, blockRoot, blockCopy); err != nil {
 		return errors.Wrap(err, "could not validate blob data availability")
 	}
+	daWaitedTime := time.Since(daStartTime)
+
 	// The rest of block processing takes a lock on forkchoice.
 	s.cfg.ForkChoiceStore.Lock()
 	defer s.cfg.ForkChoiceStore.Unlock()
@@ -114,7 +124,7 @@ func (s *Service) ReceiveBlock(ctx context.Context, block interfaces.ReadOnlySig
 		tracing.AnnotateError(span, err)
 		return err
 	}
-	if coreTime.CurrentEpoch(postState) > currentEpoch {
+	if coreTime.CurrentEpoch(postState) > currentEpoch && s.cfg.ForkChoiceStore.IsCanonical(blockRoot) {
 		headSt, err := s.HeadState(ctx)
 		if err != nil {
 			return errors.Wrap(err, "could not get head state")
@@ -165,7 +175,7 @@ func (s *Service) ReceiveBlock(ctx context.Context, block interfaces.ReadOnlySig
 	// Log block sync status.
 	cp = s.cfg.ForkChoiceStore.JustifiedCheckpoint()
 	justified := &ethpb.Checkpoint{Epoch: cp.Epoch, Root: bytesutil.SafeCopyBytes(cp.Root[:])}
-	if err := logBlockSyncStatus(blockCopy.Block(), blockRoot, justified, finalized, receivedTime, uint64(s.genesisTime.Unix())); err != nil {
+	if err := logBlockSyncStatus(blockCopy.Block(), blockRoot, justified, finalized, receivedTime, uint64(s.genesisTime.Unix()), daWaitedTime); err != nil {
 		log.WithError(err).Error("Unable to log block sync status")
 	}
 	// Log payload data
@@ -177,7 +187,8 @@ func (s *Service) ReceiveBlock(ctx context.Context, block interfaces.ReadOnlySig
 		log.WithError(err).Error("Unable to log state transition data")
 	}
 
-	chainServiceProcessingTime.Observe(float64(time.Since(receivedTime).Milliseconds()))
+	timeWithoutDaWait := time.Since(receivedTime) - daWaitedTime
+	chainServiceProcessingTime.Observe(float64(timeWithoutDaWait.Milliseconds()))
 
 	return nil
 }
@@ -250,11 +261,6 @@ func (s *Service) ReceiveBlockBatch(ctx context.Context, blocks []blocks.ROBlock
 // HasBlock returns true if the block of the input root exists in initial sync blocks cache or DB.
 func (s *Service) HasBlock(ctx context.Context, root [32]byte) bool {
 	return s.hasBlockInInitSyncOrDB(ctx, root)
-}
-
-// RecentBlockSlot returns block slot form fork choice store
-func (s *Service) RecentBlockSlot(root [32]byte) (primitives.Slot, error) {
-	return s.cfg.ForkChoiceStore.Slot(root)
 }
 
 // ReceiveAttesterSlashing receives an attester slashing and inserts it to forkchoice

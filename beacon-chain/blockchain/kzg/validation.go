@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	GoKZG "github.com/crate-crypto/go-kzg-4844"
+	"github.com/prysmaticlabs/prysm/v4/consensus-types/blocks"
 	ethpb "github.com/prysmaticlabs/prysm/v4/proto/prysm/v1alpha1"
 )
 
@@ -12,7 +13,7 @@ import (
 // - Expected KZG commitments match the number of blobs in the block
 // - That the number of proofs match the number of blobs
 // - That the proofs are verified against the KZG commitments
-func IsDataAvailable(commitments [][]byte, sidecars []*ethpb.BlobSidecar) error {
+func IsDataAvailable(commitments [][]byte, sidecars []*ethpb.DeprecatedBlobSidecar) error {
 	if len(commitments) != len(sidecars) {
 		return fmt.Errorf("could not check data availability, expected %d commitments, obtained %d",
 			len(commitments), len(sidecars))
@@ -29,6 +30,11 @@ func IsDataAvailable(commitments [][]byte, sidecars []*ethpb.BlobSidecar) error 
 		cmts[i] = bytesToCommitment(commitments[i])
 	}
 	return kzgContext.VerifyBlobKZGProofBatch(blobs, cmts, proofs)
+}
+
+// VerifyROBlobCommitment is a helper that massages the fields of an ROBlob into the types needed to call VerifyBlobKZGProof.
+func VerifyROBlobCommitment(sc blocks.ROBlob) error {
+	return kzgContext.VerifyBlobKZGProof(bytesToBlob(sc.Blob), bytesToCommitment(sc.KzgCommitment), bytesToKZGProof(sc.KzgProof))
 }
 
 func bytesToBlob(blob []byte) (ret GoKZG.Blob) {

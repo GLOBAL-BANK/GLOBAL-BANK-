@@ -34,7 +34,7 @@ func (m SignedBeaconBlock) IsNil() bool {
 	return m.BeaconBlock == nil || m.Block().IsNil()
 }
 
-func (SignedBeaconBlock) Copy() (interfaces.ReadOnlySignedBeaconBlock, error) {
+func (SignedBeaconBlock) Copy() (interfaces.SignedBeaconBlock, error) {
 	panic("implement me")
 }
 
@@ -313,6 +313,10 @@ func (b *BeaconBlockBody) BlobKzgCommitments() ([][]byte, error) {
 }
 
 func (b *BeaconBlockBody) Attestations() []*eth.Attestation {
+	panic("implement me")
+}
+
+func (b *BeaconBlockBody) Version() int {
 	panic("implement me")
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/prysmaticlabs/prysm/v4/beacon-chain/core/transition"
 	"github.com/prysmaticlabs/prysm/v4/beacon-chain/sync"
+	"github.com/prysmaticlabs/prysm/v4/beacon-chain/verification"
 	"github.com/prysmaticlabs/prysm/v4/consensus-types/blocks"
 	"github.com/prysmaticlabs/prysm/v4/consensus-types/interfaces"
 	"github.com/prysmaticlabs/prysm/v4/consensus-types/primitives"
@@ -62,7 +63,7 @@ func (s *Service) roundRobinSync(genesis time.Time) error {
 
 // syncToFinalizedEpoch sync from head to best known finalized epoch.
 func (s *Service) syncToFinalizedEpoch(ctx context.Context, genesis time.Time) error {
-	highestFinalizedSlot, err := slots.EpochStart(s.highestFinalizedEpoch() + 1)
+	highestFinalizedSlot, err := slots.EpochStart(s.highestFinalizedEpoch())
 	if err != nil {
 		return err
 	}
@@ -163,8 +164,15 @@ func (s *Service) processFetchedDataRegSync(
 	blksWithoutParentCount := 0
 	for _, b := range data.bwb {
 		if len(b.Blobs) > 0 {
-			if err := s.cfg.DB.SaveBlobSidecar(ctx, b.Blobs); err != nil {
-				log.WithError(err).Warn("Failed to save blob sidecar")
+			verified, err := verification.BlobSidecarSliceNoop(b.Blobs)
+			if err != nil {
+				log.WithField("root", b.Block.Root()).WithError(err).Error("blobs failed verification")
+				continue
+			}
+			for i := range verified {
+				if err := s.cfg.BlobStorage.Save(verified[i]); err != nil {
+					log.WithError(err).Warn("Failed to save blob sidecar")
+				}
 			}
 		}
 
@@ -276,7 +284,8 @@ func validUnprocessed(ctx context.Context, bwb []blocks.BlockWithVerifiedBlobs, 
 	for i := range bwb {
 		b := bwb[i].Block
 		if headSlot >= b.Block().Slot() && isProc(ctx, b) {
-			processed = &i
+			val := i
+			processed = &val
 			continue
 		}
 		if i > 0 {
@@ -295,7 +304,8 @@ func validUnprocessed(ctx context.Context, bwb []blocks.BlockWithVerifiedBlobs, 
 		maxRoot := maxIncoming.Root()
 		return nil, fmt.Errorf("headSlot:%d, blockSlot:%d , root %#x:%w", headSlot, maxIncoming.Block().Slot(), maxRoot, errBlockAlreadyProcessed)
 	}
-	return bwb[*processed:], nil
+	nonProcessedIdx := *processed + 1
+	return bwb[nonProcessedIdx:], nil
 }
 
 func (s *Service) processBatchedBlocks(ctx context.Context, genesis time.Time,
@@ -324,8 +334,14 @@ func (s *Service) processBatchedBlocks(ctx context.Context, genesis time.Time,
 		if len(bb.Blobs) == 0 {
 			continue
 		}
-		if err := s.cfg.DB.SaveBlobSidecar(ctx, bb.Blobs); err != nil {
-			return errors.Wrapf(err, "failed to save blobs for block %#x", bb.Block.Root())
+		verified, err := verification.BlobSidecarSliceNoop(bb.Blobs)
+		if err != nil {
+			return errors.Wrapf(err, "blobs for root %#x failed verification", bb.Block.Root())
+		}
+		for i := range verified {
+			if err := s.cfg.BlobStorage.Save(verified[i]); err != nil {
+				return errors.Wrapf(err, "failed to save blobs for block %#x", bb.Block.Root())
+			}
 		}
 		blobCount += len(bb.Blobs)
 	}

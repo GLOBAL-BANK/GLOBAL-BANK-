@@ -17,14 +17,12 @@ import (
 	fieldparams "github.com/prysmaticlabs/prysm/v4/config/fieldparams"
 	"github.com/prysmaticlabs/prysm/v4/config/params"
 	validatorserviceconfig "github.com/prysmaticlabs/prysm/v4/config/validator/service"
-	"github.com/prysmaticlabs/prysm/v4/consensus-types/interfaces"
 	"github.com/prysmaticlabs/prysm/v4/consensus-types/primitives"
 	ethpb "github.com/prysmaticlabs/prysm/v4/proto/prysm/v1alpha1"
 	"github.com/prysmaticlabs/prysm/v4/validator/accounts/wallet"
 	beaconChainClientFactory "github.com/prysmaticlabs/prysm/v4/validator/client/beacon-chain-client-factory"
 	"github.com/prysmaticlabs/prysm/v4/validator/client/iface"
 	nodeClientFactory "github.com/prysmaticlabs/prysm/v4/validator/client/node-client-factory"
-	slasherClientFactory "github.com/prysmaticlabs/prysm/v4/validator/client/slasher-client-factory"
 	validatorClientFactory "github.com/prysmaticlabs/prysm/v4/validator/client/validator-client-factory"
 	"github.com/prysmaticlabs/prysm/v4/validator/db"
 	"github.com/prysmaticlabs/prysm/v4/validator/graffiti"
@@ -75,6 +73,7 @@ type ValidatorService struct {
 	graffiti              []byte
 	Web3SignerConfig      *remoteweb3signer.SetupConfig
 	proposerSettings      *validatorserviceconfig.ProposerSettings
+	validatorRegBatchSize int
 }
 
 // Config for the validator service.
@@ -100,6 +99,7 @@ type Config struct {
 	ProposerSettings           *validatorserviceconfig.ProposerSettings
 	BeaconApiEndpoint          string
 	BeaconApiTimeout           time.Duration
+	ValidatorRegBatchSize      int
 }
 
 // NewValidatorService creates a new validator service for the service
@@ -128,6 +128,7 @@ func NewValidatorService(ctx context.Context, cfg *Config) (*ValidatorService, e
 		graffitiStruct:        cfg.GraffitiStruct,
 		Web3SignerConfig:      cfg.Web3SignerConfig,
 		proposerSettings:      cfg.ProposerSettings,
+		validatorRegBatchSize: cfg.ValidatorRegBatchSize,
 	}
 
 	dialOpts := ConstructDialOptions(
@@ -190,12 +191,12 @@ func (v *ValidatorService) Start() {
 
 	validatorClient := validatorClientFactory.NewValidatorClient(v.conn)
 	beaconClient := beaconChainClientFactory.NewBeaconChainClient(v.conn)
+	prysmBeaconClient := beaconChainClientFactory.NewPrysmBeaconClient(v.conn)
 
 	valStruct := &validator{
 		db:                             v.db,
 		validatorClient:                validatorClient,
 		beaconClient:                   beaconClient,
-		slashingProtectionClient:       slasherClientFactory.NewSlasherClient(v.conn),
 		node:                           nodeClientFactory.NewNodeClient(v.conn),
 		graffiti:                       v.graffiti,
 		logValidatorBalances:           v.logValidatorBalances,
@@ -213,24 +214,16 @@ func (v *ValidatorService) Start() {
 		interopKeysConfig:              v.interopKeysConfig,
 		wallet:                         v.wallet,
 		walletInitializedFeed:          v.walletInitializedFeed,
-		blockFeed:                      new(event.Feed),
+		slotFeed:                       new(event.Feed),
 		graffitiStruct:                 v.graffitiStruct,
 		graffitiOrderedIndex:           graffitiOrderedIndex,
 		eipImportBlacklistedPublicKeys: slashablePublicKeys,
 		Web3SignerConfig:               v.Web3SignerConfig,
 		proposerSettings:               v.proposerSettings,
 		walletInitializedChannel:       make(chan *wallet.Wallet, 1),
+		prysmBeaconClient:              prysmBeaconClient,
+		validatorRegBatchSize:          v.validatorRegBatchSize,
 	}
-
-	// To resolve a race condition at startup due to the interface
-	// nature of the abstracted block type. We initialize
-	// the inner type of the feed before hand. So that
-	// during future accesses, there will be no panics here
-	// from type incompatibility.
-	tempChan := make(chan interfaces.ReadOnlySignedBeaconBlock)
-	sub := valStruct.blockFeed.Subscribe(tempChan)
-	sub.Unsubscribe()
-	close(tempChan)
 
 	v.validator = valStruct
 	go run(v.ctx, v.validator)

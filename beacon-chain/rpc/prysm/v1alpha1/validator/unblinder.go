@@ -1,6 +1,7 @@
 package validator
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 
@@ -19,11 +20,10 @@ import (
 
 type unblinder struct {
 	b       interfaces.SignedBeaconBlock
-	blobs   []*ethpb.SignedBlindedBlobSidecar
 	builder builder.BlockBuilder
 }
 
-func newUnblinder(b interfaces.SignedBeaconBlock, blobs []*ethpb.SignedBlindedBlobSidecar, builder builder.BlockBuilder) (*unblinder, error) {
+func newUnblinder(b interfaces.SignedBeaconBlock, builder builder.BlockBuilder) (*unblinder, error) {
 	if err := consensusblocks.BeaconBlockIsNil(b); err != nil {
 		return nil, err
 	}
@@ -32,12 +32,11 @@ func newUnblinder(b interfaces.SignedBeaconBlock, blobs []*ethpb.SignedBlindedBl
 	}
 	return &unblinder{
 		b:       b,
-		blobs:   blobs,
 		builder: builder,
 	}, nil
 }
 
-func (u *unblinder) unblindBuilderBlock(ctx context.Context) (interfaces.SignedBeaconBlock, []*ethpb.SignedBlobSidecar, error) {
+func (u *unblinder) unblindBuilderBlock(ctx context.Context) (interfaces.SignedBeaconBlock, []*ethpb.BlobSidecar, error) {
 	if !u.b.IsBlinded() || u.b.Version() < version.Bellatrix {
 		return u.b, nil, nil
 	}
@@ -63,7 +62,7 @@ func (u *unblinder) unblindBuilderBlock(ctx context.Context) (interfaces.SignedB
 	if err = sb.SetExecution(h); err != nil {
 		return nil, nil, errors.Wrap(err, "could not set execution")
 	}
-	payload, blobsBundle, err := u.builder.SubmitBlindedBlock(ctx, sb, u.blobs)
+	payload, blobsBundle, err := u.builder.SubmitBlindedBlock(ctx, sb)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "could not submit blinded block")
 	}
@@ -100,7 +99,7 @@ func (u *unblinder) unblindBuilderBlock(ctx context.Context) (interfaces.SignedB
 		return nil, nil, errors.Wrap(err, "could not get transactions from payload")
 	}
 
-	if wb.Version() >= version.Bellatrix && blobsBundle != nil {
+	if wb.Version() >= version.Deneb && blobsBundle != nil {
 		log.WithField("blobCount", len(blobsBundle.Blobs))
 	}
 
@@ -112,33 +111,59 @@ func (u *unblinder) unblindBuilderBlock(ctx context.Context) (interfaces.SignedB
 		"txs":          len(txs),
 	}).Info("Retrieved full payload from builder")
 
-	bundle, err := unblindBlobsSidecars(u.blobs, blobsBundle)
+	sidecars, err := unblindBlobsSidecars(u.b, blobsBundle)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "could not unblind blobs sidecars")
 	}
 
-	return wb, bundle, nil
+	return wb, sidecars, nil
 }
 
-func unblindBlobsSidecars(blindSidecars []*ethpb.SignedBlindedBlobSidecar, bundle *enginev1.BlobsBundle) ([]*ethpb.SignedBlobSidecar, error) {
+func unblindBlobsSidecars(block interfaces.SignedBeaconBlock, bundle *enginev1.BlobsBundle) ([]*ethpb.BlobSidecar, error) {
 	if bundle == nil {
 		return nil, nil
 	}
+	header, err := block.Header()
+	if err != nil {
+		return nil, err
+	}
+	body := block.Block().Body()
+	blockCommitments, err := body.BlobKzgCommitments()
+	if err != nil {
+		return nil, err
+	}
 
-	sidecars := make([]*ethpb.SignedBlobSidecar, len(blindSidecars))
-	for i, b := range blindSidecars {
-		sidecars[i] = &ethpb.SignedBlobSidecar{
-			Message: &ethpb.BlobSidecar{
-				BlockRoot:       bytesutil.SafeCopyBytes(b.Message.BlockRoot),
-				Index:           b.Message.Index,
-				Slot:            b.Message.Slot,
-				BlockParentRoot: bytesutil.SafeCopyBytes(b.Message.BlockParentRoot),
-				ProposerIndex:   b.Message.ProposerIndex,
-				Blob:            bytesutil.SafeCopyBytes(bundle.Blobs[i]),
-				KzgCommitment:   bytesutil.SafeCopyBytes(b.Message.KzgCommitment),
-				KzgProof:        bytesutil.SafeCopyBytes(b.Message.KzgProof),
-			},
-			Signature: bytesutil.SafeCopyBytes(b.Signature),
+	// Ensure there are equal counts of blobs/commitments/proofs.
+	if len(bundle.KzgCommitments) != len(bundle.Blobs) {
+		return nil, errors.New("mismatch commitments count")
+	}
+	if len(bundle.Proofs) != len(bundle.Blobs) {
+		return nil, errors.New("mismatch proofs count")
+	}
+
+	// Verify that commitments in the bundle match the block.
+	if len(bundle.KzgCommitments) != len(blockCommitments) {
+		return nil, errors.New("commitment count doesn't match block")
+	}
+	for i, commitment := range blockCommitments {
+		if !bytes.Equal(bundle.KzgCommitments[i], commitment) {
+			return nil, errors.New("commitment value doesn't match block")
+		}
+	}
+
+	sidecars := make([]*ethpb.BlobSidecar, len(bundle.Blobs))
+	for i, b := range bundle.Blobs {
+		proof, err := consensusblocks.MerkleProofKZGCommitment(body, i)
+		if err != nil {
+			return nil, err
+		}
+		sidecars[i] = &ethpb.BlobSidecar{
+			Index:                    uint64(i),
+			Blob:                     bytesutil.SafeCopyBytes(b),
+			KzgCommitment:            bytesutil.SafeCopyBytes(bundle.KzgCommitments[i]),
+			KzgProof:                 bytesutil.SafeCopyBytes(bundle.Proofs[i]),
+			SignedBlockHeader:        header,
+			CommitmentInclusionProof: proof,
 		}
 	}
 	return sidecars, nil
