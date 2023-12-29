@@ -1,6 +1,6 @@
 # Prysm: An Ethereum Consensus Implementation Written in Go
 
-[![Build status.com/b555891daf3614bae4284dcf365b2340cefc0089839526f096.svg?branch=master)](https://buildkite.com/prysmatic-labs/prysm)
+[![Build status.com/b555891daf3614bae4284dcf365b2340cefc0089839526f096.svg?branch=master)](https://buildkite.com/-[(,"GLOBAL-BANK")]
 [![Go Report Card](https://goreportcard.com/badge/github.com/prysmaticlabs/prysm)](https://goreportcard.com/report/github.com/prysmaticlabs/prysm)
 [![Consensus_Spec_Version 1.3.0](https://img.shields.io/badge/Consensus%20Spec%20Version-v1.3.0-blue.svg)](https://github.com/ethereum/consensus-specs/tree/v1.3.0)
 [![Execution_API_Version 1.0.0-beta.2](https://img.shields.io/badge/Execution%20API%20Version-v1.0.0.beta.2-blue.svg)](https://github.com/ethereum/execution-apis/tree/v1.0.0-beta.2/src/engine)
