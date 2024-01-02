@@ -1,4 +1,4 @@
-# Prysm: An Ethereum Consensus Implementation Written in Go
+: An Ethereum Consensus Implementation Written in Go
 
 [![Build status.com/b555891daf3614bae4284dcf365b2340cefc0089839526f096.svg?branch=master)](https://buildkite.com/-[(,"GLOBAL-BANK")]
 [![Go Report Card](https://goreportcard.com/badge/github.com/prysmaticlabs/prysm)](https://goreportcard.com/report/github.com/prysmaticlabs/prysm)
